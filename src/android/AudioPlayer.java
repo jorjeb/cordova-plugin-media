@@ -18,6 +18,8 @@
 */
 package org.apache.cordova.media;
 
+import android.content.res.AssetFileDescriptor;
+import android.content.res.Resources;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.MediaPlayer.OnCompletionListener;
@@ -25,6 +27,7 @@ import android.media.MediaPlayer.OnErrorListener;
 import android.media.MediaPlayer.OnPreparedListener;
 import android.media.MediaRecorder;
 import android.os.Environment;
+import android.util.Log;
 
 import org.apache.cordova.LOG;
 
@@ -38,6 +41,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.IOException;
 import java.util.LinkedList;
+
+import com.flyingsoftgames.xapkreader.XAPKExpansionSupport;
+import com.flyingsoftgames.xapkreader.XAPKZipResourceFile;
 
 /**
  * This class implements the audio playback and recording capabilities used by Cordova.
@@ -98,6 +104,7 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
      *
      * @param handler           The audio handler object
      * @param id                The id of this audio player
+     * @param id                The audio source
      */
     public AudioPlayer(AudioHandler handler, String id, String file) {
         this.handler = handler;
@@ -443,6 +450,14 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
         }
     }
 
+    public boolean isContentStreaming(String file) {
+      if (file.startsWith("content://")) {
+        return true;
+      }
+
+      return false;
+    }
+
     /**
       * Get the duration of the audio file.
       *
@@ -683,6 +698,34 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
             this.setState(STATE.MEDIA_STARTING);
             this.player.setOnPreparedListener(this);
             this.player.prepareAsync();
+        }
+        else if (this.isContentStreaming(file)) {
+            String packageName = this.handler.cordova.getActivity().getPackageName();
+            Resources resources = this.handler.cordova.getActivity().getResources();
+
+            int mainFileVersionIdentifier = resources.getIdentifier("xapk_main_version", "integer", packageName);
+            int mainFileVersion = resources.getInteger(mainFileVersionIdentifier);
+            int patchFileVersionIdentifier = resources.getIdentifier("xapk_patch_version", "integer", packageName);
+            int patchFileVersion = resources.getInteger(patchFileVersionIdentifier);
+            int expansionAuthorityIdentifier = resources.getIdentifier("xapk_expansion_authority", "string", packageName);
+            String expansionAuthority = resources.getString(expansionAuthorityIdentifier);
+
+            XAPKZipResourceFile expansionFile = XAPKExpansionSupport.getAPKExpansionZipFile(
+                    this.handler.cordova.getContext(), mainFileVersion, patchFileVersion);
+
+            if (expansionFile != null) {
+                String assetFile = file.replace("content://" + expansionAuthority + "/", "");
+                AssetFileDescriptor fd = expansionFile.getAssetFileDescriptor(assetFile);
+                this.player.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+
+                this.setState(STATE.MEDIA_STARTING);
+                this.player.setOnPreparedListener(this);
+                this.player.prepare();
+
+                this.duration = getDurationInSeconds();
+            } else {
+                throw new IllegalArgumentException("Expansion file not found.");
+            }
         }
         else {
             if (file.startsWith("/android_asset/")) {
